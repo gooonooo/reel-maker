@@ -1,1 +1,121 @@
-hj
+name: Make Reel
+
+on:
+  workflow_dispatch:
+    inputs:
+      job_id:
+        description: "Unique job id"
+        required: true
+      role:
+        description: "Role title"
+        required: true
+      company:
+        description: "Company name"
+        required: true
+      location:
+        description: "Job location"
+        required: false
+        default: "India"
+      exp_label:
+        description: "e.g. Fresher or 0-2 Yrs"
+        required: false
+        default: "Fresher"
+      blur_area:
+        description: "panel (text area only) or full (whole video)"
+        required: false
+        default: "panel"
+      callback_url:
+        description: "n8n resume URL (optional)"
+        required: false
+        default: ""
+
+jobs:
+  make:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+      JOB_ID: ${{ inputs.job_id }}
+      ROLE: ${{ inputs.role }}
+      COMPANY: ${{ inputs.company }}
+      LOCATION: ${{ inputs.location }}
+      EXP: ${{ inputs.exp_label }}
+      BLUR_AREA: ${{ inputs.blur_area }}
+      CALLBACK_URL: ${{ inputs.callback_url }}
+      BLUR_STRENGTH: "0.35"
+    steps:
+      - name: Install ffmpeg and font
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg fonts-crosextra-carlito jq
+
+      - name: Pick a random video (not the last one used)
+        run: |
+          AUTH=(-H "Authorization: Bearer $SUPABASE_KEY" -H "apikey: $SUPABASE_KEY")
+          ALL=$(curl -sf -X POST "$SUPABASE_URL/storage/v1/object/list/videos" "${AUTH[@]}" \
+            -H "Content-Type: application/json" -d '{"prefix":"","limit":100}' \
+            | jq -r '.[].name | select(endswith(".mp4"))')
+          [ -n "$ALL" ] || { echo "No videos found in bucket 'videos'"; exit 1; }
+          LAST=$(curl -sf "$SUPABASE_URL/rest/v1/state?key=eq.last_video&select=value" "${AUTH[@]}" | jq -r '.[0].value // ""')
+          PICK=$(echo "$ALL" | grep -vx "$LAST" | shuf -n1 || true)
+          [ -n "$PICK" ] || PICK=$(echo "$ALL" | shuf -n1)
+          echo "Picked: $PICK (last was: $LAST)"
+          echo "PICK=$PICK" >> "$GITHUB_ENV"
+          curl -sf -o input.mp4 "$SUPABASE_URL/storage/v1/object/public/videos/$PICK"
+
+      - name: Add light blur and text overlay
+        run: |
+          set -e
+          JOB=$(echo "$JOB_ID" | tr -cd 'a-zA-Z0-9' | cut -c1-24)
+          echo "JOB=$JOB" >> "$GITHUB_ENV"
+          # Carlito = free font that looks the same as Calibri
+          FONT=/usr/share/fonts/truetype/crosextra/Carlito-Bold.ttf
+          short() { echo "$1" | cut -c1-"$2"; }
+          printf '%s' "Role: $(short "$ROLE" 22)"                       > t0.txt
+          printf '%s' "Company: $(short "$COMPANY" 20)"                 > t1.txt
+          printf '%s' "Location: $(short "$LOCATION" 20)"               > t2.txt
+          printf '%s' "Experience: $(echo "$EXP" | cut -c1-12)"         > t3.txt
+          printf '%s' "Comment any emoji to get the link"               > t4.txt
+          # each line is drawn 3 times: grey outer outline, black outline, white fill
+          DT=""
+          i=0
+          for spec in "56 770" "56 860" "56 950" "56 1040" "40 1170"; do
+            set -- $spec
+            for layer in "14 0x9a9a9a" "7 black"; do
+              set -- $spec $layer
+              DT="$DT,drawtext=fontfile=$FONT:textfile=t$i.txt:fontcolor=$4:fontsize=$1:borderw=$3:bordercolor=$4:x=(w-text_w)/2:y=$2"
+            done
+            set -- $spec
+            DT="$DT,drawtext=fontfile=$FONT:textfile=t$i.txt:fontcolor=white:fontsize=$1:x=(w-text_w)/2:y=$2"
+            i=$((i+1))
+          done
+          if [ "$BLUR_AREA" = "full" ]; then
+            CROP="crop=720:1280:0:0"; POS="0:0"
+          else
+            CROP="crop=720:600:0:700"; POS="0:700"
+          fi
+          FC="[0:v]scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,setsar=1,split[a][b];[b]$CROP,boxblur=20:3,format=rgba,colorchannelmixer=aa=$BLUR_STRENGTH[fog];[a][fog]overlay=$POS$DT[out]"
+          ffmpeg -y -loglevel error -i input.mp4 -t 20 -filter_complex "$FC" -map "[out]" -map "0:a?" \
+            -c:v libx264 -preset veryfast -crf 26 -pix_fmt yuv420p -c:a aac -movflags +faststart out.mp4
+          ls -la out.mp4
+
+      - name: Upload reel to Supabase and remember the video used
+        run: |
+          set -e
+          curl -sf -X POST "$SUPABASE_URL/storage/v1/object/reels/$JOB.mp4" \
+            -H "Authorization: Bearer $SUPABASE_KEY" -H "apikey: $SUPABASE_KEY" \
+            -H "Content-Type: video/mp4" -H "x-upsert: true" --data-binary @out.mp4 > /dev/null
+          URL="$SUPABASE_URL/storage/v1/object/public/reels/$JOB.mp4"
+          echo "VIDEO_URL=$URL" >> "$GITHUB_ENV"
+          curl -sf -X PATCH "$SUPABASE_URL/rest/v1/state?key=eq.last_video" \
+            -H "Authorization: Bearer $SUPABASE_KEY" -H "apikey: $SUPABASE_KEY" \
+            -H "Content-Type: application/json" -H "Prefer: return=minimal" \
+            -d "{\"value\":\"$PICK\"}"
+          echo "Reel: $URL"
+
+      - name: Tell n8n it is done
+        if: ${{ inputs.callback_url != '' }}
+        run: |
+          curl -sf -X POST "$CALLBACK_URL" -H "Content-Type: application/json" \
+            -d "{\"job_id\":\"$JOB\",\"video_url\":\"$VIDEO_URL\",\"video_used\":\"$PICK\"}"
