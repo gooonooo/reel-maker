@@ -43,7 +43,8 @@ jobs:
       EXP: ${{ inputs.exp_label }}
       BLUR_AREA: ${{ inputs.blur_area }}
       CALLBACK_URL: ${{ inputs.callback_url }}
-      BLUR_STRENGTH: "0.5"
+      BLUR_STRENGTH: "1.0"      # 1.0 = fully blurred layer, lower = mix with sharp video
+      BLUR_SIGMA: "25"          # blur amount: bigger = blurrier (try 10 to 50)
     steps:
       - name: Install ffmpeg and font
         run: |
@@ -95,7 +96,7 @@ jobs:
           else
             CROP="crop=720:600:0:700"; POS="0:700"
           fi
-          FC="[0:v]scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,setsar=1,split[a][b];[b]$CROP,boxblur=30:4,format=rgba,colorchannelmixer=aa=$BLUR_STRENGTH[fog];[a][fog]overlay=$POS$DT[out]"
+          FC="[0:v]scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,setsar=1,split[a][b];[b]$CROP,gblur=sigma=$BLUR_SIGMA:steps=3,format=rgba,colorchannelmixer=aa=$BLUR_STRENGTH[fog];[a][fog]overlay=$POS$DT[out]"
           # if the video is shorter than 20 seconds, repeat it until it is at least 20 seconds; never longer than 30 seconds
           DUR=$(ffprobe -v error -show_entries format=duration -of csv=p=0 input.mp4)
           LOOPS=$(awk -v d="$DUR" 'BEGIN{ if (d<=0) {print 0} else if (d<20) {n=int(20/d); if (n*d<20) n++; print n-1} else print 0 }')
