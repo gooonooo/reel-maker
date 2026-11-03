@@ -43,7 +43,7 @@ jobs:
       EXP: ${{ inputs.exp_label }}
       BLUR_AREA: ${{ inputs.blur_area }}
       CALLBACK_URL: ${{ inputs.callback_url }}
-      BLUR_STRENGTH: "0.7"      # 1.0 = fully blurred layer, lower = mix with sharp video
+      BLUR_STRENGTH: "0.9"      # 1.0 = fully blurred layer, lower = mix with sharp video
       BLUR_SIGMA: "15"          # blur amount: bigger = blurrier (try 10 to 50)
     steps:
       - name: Install ffmpeg and font
