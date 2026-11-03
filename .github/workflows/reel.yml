@@ -96,7 +96,11 @@ jobs:
             CROP="crop=720:600:0:700"; POS="0:700"
           fi
           FC="[0:v]scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,setsar=1,split[a][b];[b]$CROP,boxblur=20:3,format=rgba,colorchannelmixer=aa=$BLUR_STRENGTH[fog];[a][fog]overlay=$POS$DT[out]"
-          ffmpeg -y -loglevel error -i input.mp4 -t 20 -filter_complex "$FC" -map "[out]" -map "0:a?" \
+          # if the video is shorter than 20 seconds, repeat it until it is at least 20 seconds; never longer than 30 seconds
+          DUR=$(ffprobe -v error -show_entries format=duration -of csv=p=0 input.mp4)
+          LOOPS=$(awk -v d="$DUR" 'BEGIN{ if (d<=0) {print 0} else if (d<20) {n=int(20/d); if (n*d<20) n++; print n-1} else print 0 }')
+          echo "Video length: $DUR s, extra repeats: $LOOPS"
+          ffmpeg -y -loglevel error -stream_loop "$LOOPS" -i input.mp4 -t 30 -filter_complex "$FC" -map "[out]" -map "0:a?" \
             -c:v libx264 -preset veryfast -crf 26 -pix_fmt yuv420p -c:a aac -movflags +faststart out.mp4
           ls -la out.mp4
 
