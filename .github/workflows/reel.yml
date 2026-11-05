@@ -119,18 +119,8 @@ jobs:
             -d "{\"value\":\"$PICK\"}"
           echo "Reel: $URL"
 
-           - name: Tell n8n it is done
+      - name: Tell n8n it is done
         if: ${{ inputs.callback_url != '' }}
         run: |
-          HTTP=$(curl -sS -o callback_response.txt -w "%{http_code}" \
-            -X POST "$CALLBACK_URL" \
-            -H "Content-Type: application/json" \
-            -d "{\"job_id\":\"$JOB\",\"video_url\":\"$VIDEO_URL\",\"video_used\":\"$PICK\"}")
-
-          echo "Callback HTTP Status: $HTTP"
-          echo "Callback Response:"
-          cat callback_response.txt
-
-          if [ "$HTTP" -lt 200 ] || [ "$HTTP" -ge 300 ]; then
-            exit 1
-          fi
+          curl -sf -X POST "$CALLBACK_URL" -H "Content-Type: application/json" \
+            -d "{\"job_id\":\"$JOB\",\"video_url\":\"$VIDEO_URL\",\"video_used\":\"$PICK\"}"
