@@ -122,5 +122,5 @@ jobs:
       - name: Tell n8n it is done
         if: ${{ inputs.callback_url != '' }}
         run: |
-          curl -sf -X POST "$CALLBACK_URL" -H "Content-Type: application/json" \
-            -d "{\"job_id\":\"$JOB\",\"video_url\":\"$VIDEO_URL\",\"video_used\":\"$PICK\"}"
+          curl -sS -i -X POST "$CALLBACK_URL" -H "Content-Type: application/json" \
+  -d "{\"job_id\":\"$JOB\",\"video_url\":\"$VIDEO_URL\",\"video_used\":\"$PICK\"}"
