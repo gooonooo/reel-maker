@@ -123,4 +123,4 @@ jobs:
         if: ${{ inputs.callback_url != '' }}
         run: |
           curl -sS -i -X POST "$CALLBACK_URL" -H "Content-Type: application/json" \
-  -d "{\"job_id\":\"$JOB\",\"video_url\":\"$VIDEO_URL\",\"video_used\":\"$PICK\"}"
+          -d "{\"job_id\":\"$JOB\",\"video_url\":\"$VIDEO_URL\",\"video_used\":\"$PICK\"}"
