@@ -25,7 +25,7 @@ on:
         required: false
         default: "full"
       callback_url:
-        description: "n8n resume URL (optional)"
+        description: "n8n production webhook URL (optional)"
         required: false
         default: ""
 
@@ -36,6 +36,7 @@ jobs:
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+      CALLBACK_SECRET: ${{ secrets.CALLBACK_SECRET }}
       JOB_ID: ${{ inputs.job_id }}
       ROLE: ${{ inputs.role }}
       COMPANY: ${{ inputs.company }}
@@ -46,13 +47,18 @@ jobs:
       BLUR_STRENGTH: "0.9"
       BLUR_SIGMA: "15"
     steps:
-      - name: Install font (no apt update, fast)
-        timeout-minutes: 5
+      - name: Setup ffmpeg (prebuilt, fast)
+        uses: FedericoCarboni/setup-ffmpeg@v3
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install font (small)
         run: |
           export DEBIAN_FRONTEND=noninteractive
-          sudo timeout 120 apt-get install -y -qq --no-install-recommends fonts-crosextra-carlito \
-            || { sudo timeout 120 apt-get update -qq || true; sudo timeout 180 apt-get install -y -qq --no-install-recommends fonts-crosextra-carlito; }
+          sudo apt-get install -y -qq --no-install-recommends fonts-crosextra-carlito \
+            || { sudo apt-get update -qq; sudo apt-get install -y -qq --no-install-recommends fonts-crosextra-carlito; }
           ffmpeg -version | head -1
+          ffprobe -version | head -1
           jq --version
 
       - name: Pick a random video (not the last one used)
@@ -123,7 +129,9 @@ jobs:
       - name: Tell n8n it is done
         if: ${{ inputs.callback_url != '' }}
         run: |
-          # Must be /webhook/... (production), NOT /webhook-test/...
+          # callback_url must be the production URL (/webhook/...), not /webhook-test/...
           curl -sS -i --max-time 90 --retry 3 --retry-delay 10 --retry-all-errors \
-            -X POST "$CALLBACK_URL" -H "Content-Type: application/json" \
+            -X POST "$CALLBACK_URL" \
+            -H "Content-Type: application/json" \
+            -H "x-secret: $CALLBACK_SECRET" \
             -d "{\"job_id\":\"$JOB\",\"video_url\":\"$VIDEO_URL\",\"video_used\":\"$PICK\"}"
