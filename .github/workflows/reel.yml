@@ -43,13 +43,17 @@ jobs:
       EXP: ${{ inputs.exp_label }}
       BLUR_AREA: ${{ inputs.blur_area }}
       CALLBACK_URL: ${{ inputs.callback_url }}
-      BLUR_STRENGTH: "0.9"      # 1.0 = fully blurred layer, lower = mix with sharp video
-      BLUR_SIGMA: "15"          # blur amount: bigger = blurrier (try 10 to 50)
+      BLUR_STRENGTH: "0.9"
+      BLUR_SIGMA: "15"
     steps:
-      - name: Install ffmpeg and font
+      - name: Install font (no apt update, fast)
+        timeout-minutes: 5
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq ffmpeg fonts-crosextra-carlito jq
+          export DEBIAN_FRONTEND=noninteractive
+          sudo timeout 120 apt-get install -y -qq --no-install-recommends fonts-crosextra-carlito \
+            || { sudo timeout 120 apt-get update -qq || true; sudo timeout 180 apt-get install -y -qq --no-install-recommends fonts-crosextra-carlito; }
+          ffmpeg -version | head -1
+          jq --version
 
       - name: Pick a random video (not the last one used)
         run: |
@@ -63,14 +67,13 @@ jobs:
           [ -n "$PICK" ] || PICK=$(echo "$ALL" | shuf -n1)
           echo "Picked: $PICK (last was: $LAST)"
           echo "PICK=$PICK" >> "$GITHUB_ENV"
-          curl -sf -o input.mp4 "$SUPABASE_URL/storage/v1/object/public/videos/$PICK"
+          curl -sf --max-time 120 -o input.mp4 "$SUPABASE_URL/storage/v1/object/public/videos/$PICK"
 
       - name: Add light blur and text overlay
         run: |
           set -e
           JOB=$(echo "$JOB_ID" | tr -cd 'a-zA-Z0-9' | cut -c1-24)
           echo "JOB=$JOB" >> "$GITHUB_ENV"
-          # Carlito = free font that looks the same as Calibri
           FONT=/usr/share/fonts/truetype/crosextra/Carlito-Bold.ttf
           short() { echo "$1" | cut -c1-"$2"; }
           printf '%s' "Role: $(short "$ROLE" 22)"                       > t0.txt
@@ -78,7 +81,6 @@ jobs:
           printf '%s' "Location: $(short "$LOCATION" 20)"               > t2.txt
           printf '%s' "Experience: $(echo "$EXP" | cut -c1-12)"         > t3.txt
           printf '%s' "Comment any emoji to get the link"               > t4.txt
-          # each line is drawn 3 times: grey outer outline, black outline, white fill
           DT=""
           i=0
           for spec in "56 430" "56 520" "56 610" "56 700" "40 820"; do
@@ -97,7 +99,6 @@ jobs:
             CROP="crop=720:600:0:700"; POS="0:700"
           fi
           FC="[0:v]scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,setsar=1,split[a][b];[b]$CROP,gblur=sigma=$BLUR_SIGMA:steps=3,format=rgba,colorchannelmixer=aa=$BLUR_STRENGTH[fog];[a][fog]overlay=$POS$DT[out]"
-          # if the video is shorter than 20 seconds, repeat it until it is at least 20 seconds; never longer than 30 seconds
           DUR=$(ffprobe -v error -show_entries format=duration -of csv=p=0 input.mp4)
           LOOPS=$(awk -v d="$DUR" 'BEGIN{ if (d<=0) {print 0} else if (d<20) {n=int(20/d); if (n*d<20) n++; print n-1} else print 0 }')
           echo "Video length: $DUR s, extra repeats: $LOOPS"
@@ -108,7 +109,7 @@ jobs:
       - name: Upload reel to Supabase and remember the video used
         run: |
           set -e
-          curl -sf -X POST "$SUPABASE_URL/storage/v1/object/reels/$JOB.mp4" \
+          curl -sf --max-time 180 -X POST "$SUPABASE_URL/storage/v1/object/reels/$JOB.mp4" \
             -H "Authorization: Bearer $SUPABASE_KEY" -H "apikey: $SUPABASE_KEY" \
             -H "Content-Type: video/mp4" -H "x-upsert: true" --data-binary @out.mp4 > /dev/null
           URL="$SUPABASE_URL/storage/v1/object/public/reels/$JOB.mp4"
@@ -122,5 +123,7 @@ jobs:
       - name: Tell n8n it is done
         if: ${{ inputs.callback_url != '' }}
         run: |
-          curl -sS -i -X POST "$CALLBACK_URL" -H "Content-Type: application/json" \
-          -d "{\"job_id\":\"$JOB\",\"video_url\":\"$VIDEO_URL\",\"video_used\":\"$PICK\"}"
+          # Must be /webhook/... (production), NOT /webhook-test/...
+          curl -sS -i --max-time 90 --retry 3 --retry-delay 10 --retry-all-errors \
+            -X POST "$CALLBACK_URL" -H "Content-Type: application/json" \
+            -d "{\"job_id\":\"$JOB\",\"video_url\":\"$VIDEO_URL\",\"video_used\":\"$PICK\"}"
