@@ -47,19 +47,15 @@ jobs:
       BLUR_STRENGTH: "0.9"
       BLUR_SIGMA: "15"
     steps:
-      - name: Setup ffmpeg (prebuilt, fast)
-        uses: FedericoCarboni/setup-ffmpeg@v3
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Install font (small)
+      - name: Install ffmpeg and font
+        timeout-minutes: 8
         run: |
           export DEBIAN_FRONTEND=noninteractive
-          sudo apt-get install -y -qq --no-install-recommends fonts-crosextra-carlito \
-            || { sudo apt-get update -qq; sudo apt-get install -y -qq --no-install-recommends fonts-crosextra-carlito; }
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends ffmpeg fonts-crosextra-carlito
           ffmpeg -version | head -1
-          ffprobe -version | head -1
-          jq --version
+          ffmpeg -hide_banner -filters | grep -w drawtext
+          ls /usr/share/fonts/truetype/crosextra/Carlito-Bold.ttf
 
       - name: Pick a random video (not the last one used)
         run: |
