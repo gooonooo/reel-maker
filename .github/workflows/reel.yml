@@ -47,15 +47,34 @@ jobs:
       BLUR_STRENGTH: "0.9"
       BLUR_SIGMA: "15"
     steps:
-      - name: Install ffmpeg and font
+      - name: Restore tools cache (ffmpeg + font)
+        id: tools
+        uses: actions/cache@v4
+        with:
+          path: ~/tools
+          key: tools-btbn-carlito-v1
+
+      - name: Download tools (first run only)
+        if: steps.tools.outputs.cache-hit != 'true'
         timeout-minutes: 8
         run: |
+          set -e
+          mkdir -p "$HOME/tools"
+          curl -sSL --retry 3 --max-time 240 \
+            https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz \
+            | tar -xJ --strip-components=2 -C "$HOME/tools" --wildcards '*/bin/ffmpeg' '*/bin/ffprobe'
           export DEBIAN_FRONTEND=noninteractive
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends ffmpeg fonts-crosextra-carlito
-          ffmpeg -version | head -1
-          ffmpeg -hide_banner -filters | grep -w drawtext
-          ls /usr/share/fonts/truetype/crosextra/Carlito-Bold.ttf
+          sudo apt-get install -y -qq --no-install-recommends fonts-crosextra-carlito \
+            || { sudo apt-get update -qq; sudo apt-get install -y -qq --no-install-recommends fonts-crosextra-carlito; }
+          cp /usr/share/fonts/truetype/crosextra/Carlito-Bold.ttf "$HOME/tools/"
+
+      - name: Check tools
+        run: |
+          set -e
+          echo "$HOME/tools" >> "$GITHUB_PATH"
+          "$HOME/tools/ffmpeg" -version | head -1
+          "$HOME/tools/ffmpeg" -hide_banner -filters | grep -w drawtext
+          ls -la "$HOME/tools/Carlito-Bold.ttf"
 
       - name: Pick a random video (not the last one used)
         run: |
@@ -76,7 +95,7 @@ jobs:
           set -e
           JOB=$(echo "$JOB_ID" | tr -cd 'a-zA-Z0-9' | cut -c1-24)
           echo "JOB=$JOB" >> "$GITHUB_ENV"
-          FONT=/usr/share/fonts/truetype/crosextra/Carlito-Bold.ttf
+          FONT="$HOME/tools/Carlito-Bold.ttf"
           short() { echo "$1" | cut -c1-"$2"; }
           printf '%s' "Role: $(short "$ROLE" 22)"                       > t0.txt
           printf '%s' "Company: $(short "$COMPANY" 20)"                 > t1.txt
@@ -84,16 +103,18 @@ jobs:
           printf '%s' "Experience: $(echo "$EXP" | cut -c1-12)"         > t3.txt
           printf '%s' "Comment any emoji to get the link"               > t4.txt
           DT=""
-          i=0
-          for spec in "56 430" "56 520" "56 610" "56 700" "40 820"; do
-            set -- $spec
-            for layer in "14 0x9a9a9a" "7 black"; do
-              set -- $spec $layer
-              DT="$DT,drawtext=fontfile=$FONT:textfile=t$i.txt:fontcolor=$4:fontsize=$1:borderw=$3:bordercolor=$4:x=(w-text_w)/2:y=$2"
-            done
-            set -- $spec
-            DT="$DT,drawtext=fontfile=$FONT:textfile=t$i.txt:fontcolor=white:fontsize=$1:x=(w-text_w)/2:y=$2"
-            i=$((i+1))
+          YS=(430 520 610 700 820)
+          BASE=(56 56 56 56 40)
+          for i in 0 1 2 3 4; do
+            LEN=$(wc -m < t$i.txt)
+            # shrink the font for long lines so text always fits the 720px width
+            SZ=$(awk -v b="${BASE[$i]}" -v l="$LEN" 'BEGIN{ s=int(640/(l*0.52)); if (s>b) s=b; print s }')
+            OW=$(( 14 * SZ / ${BASE[$i]} ))
+            IW=$(( 7 * SZ / ${BASE[$i]} ))
+            Y=${YS[$i]}
+            DT="$DT,drawtext=fontfile=$FONT:textfile=t$i.txt:fontcolor=0x9a9a9a:fontsize=$SZ:borderw=$OW:bordercolor=0x9a9a9a:x=(w-text_w)/2:y=$Y"
+            DT="$DT,drawtext=fontfile=$FONT:textfile=t$i.txt:fontcolor=black:fontsize=$SZ:borderw=$IW:bordercolor=black:x=(w-text_w)/2:y=$Y"
+            DT="$DT,drawtext=fontfile=$FONT:textfile=t$i.txt:fontcolor=white:fontsize=$SZ:x=(w-text_w)/2:y=$Y"
           done
           if [ "$BLUR_AREA" = "full" ]; then
             CROP="crop=720:1280:0:0"; POS="0:0"
@@ -111,10 +132,12 @@ jobs:
       - name: Upload reel to Supabase and remember the video used
         run: |
           set -e
-          curl -sf --max-time 180 -X POST "$SUPABASE_URL/storage/v1/object/reels/$JOB.mp4" \
+          # unique file name per run, so a re-run never serves an old cached reel
+          NAME="$JOB-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.mp4"
+          curl -sf --max-time 180 -X POST "$SUPABASE_URL/storage/v1/object/reels/$NAME" \
             -H "Authorization: Bearer $SUPABASE_KEY" -H "apikey: $SUPABASE_KEY" \
             -H "Content-Type: video/mp4" -H "x-upsert: true" --data-binary @out.mp4 > /dev/null
-          URL="$SUPABASE_URL/storage/v1/object/public/reels/$JOB.mp4"
+          URL="$SUPABASE_URL/storage/v1/object/public/reels/$NAME"
           echo "VIDEO_URL=$URL" >> "$GITHUB_ENV"
           curl -sf -X PATCH "$SUPABASE_URL/rest/v1/state?key=eq.last_video" \
             -H "Authorization: Bearer $SUPABASE_KEY" -H "apikey: $SUPABASE_KEY" \
